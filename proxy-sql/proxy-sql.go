@@ -1,4 +1,4 @@
-package deepdives
+package proxysql
 
 import (
 	"bytes"
