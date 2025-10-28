@@ -71,12 +71,59 @@ func replicateToReplica(query string) {
 	}
 }
 
-func sendToReplica(replica string, query string) {
+func sendToReplica(replica string, query string) bool {
 	resp, err := http.Post(replica+"/replicate", "application/json", strings.NewReader(query))
 	if err != nil {
 		log.Printf("Failed to replicate to %s: %v", replica, err)
-		return
+		return false
 	}
 	defer resp.Body.Close()
 	log.Printf("Replicated to %s successfully", replica)
+	return true
+}
+
+// ~ so basically now over ther I have to handle the functionality of the sync replication so as this have to be done with in the blocking way so with in that I have to handle that out using the buiffered channels I think so
+
+func SyncReplicationHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := parseRequest(r)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	err = writeToLocalDb(data)
+	if err != nil {
+		http.Error(w, "Failed to write locally", http.StatusInternalServerError)
+		return
+	}
+
+	// ~ so here I have to create the acknowledgement channel but over there the unbuffered channels are created \
+
+	ackCh := make(chan bool)
+
+	queryBytes, _ := json.Marshal(data)
+
+	for _, replica := range replicas {
+		go func(replica string) {
+			ack := sendToReplica(replica, string(queryBytes))
+			ackCh <- ack
+		}(replica)
+	}
+
+	successCount := 0
+
+	for range replicas {
+		if <-ackCh {
+			successCount++
+		}
+	}
+
+	if successCount == len(replicas) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("✅ All replicas confirmed. Write committed."))
+
+	} else {
+		http.Error(w, "⚠️ Some replicas failed to confirm.", http.StatusGatewayTimeout)
+	}
+
 }
